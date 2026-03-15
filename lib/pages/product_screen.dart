@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:translator/translator.dart';
 
 class ProductScreen extends StatefulWidget {
   const ProductScreen({super.key});
@@ -12,6 +13,8 @@ class ProductScreen extends StatefulWidget {
 class _ProductScreenState extends State<ProductScreen> {
   List products = [];
   bool loading = true;
+  bool english = false;
+  final translator = GoogleTranslator();
 
   @override
   void initState() {
@@ -27,9 +30,26 @@ class _ProductScreenState extends State<ProductScreen> {
     if (response.statusCode == 200) {
       setState(() {
         products = json.decode(response.body);
-
         loading = false;
       });
+    }
+  }
+
+  /// TRANSLATE FUNCTION
+
+  Future<String> translateText(String text) async {
+    if (!english) return text;
+
+    try {
+      var translated = await translator.translate(
+        text,
+        from: 'th',
+        to: 'en',
+      );
+
+      return translated.text;
+    } catch (e) {
+      return text;
     }
   }
 
@@ -38,18 +58,12 @@ class _ProductScreenState extends State<ProductScreen> {
     return Scaffold(
       backgroundColor: const Color(0xffF7F7F7),
       body: SafeArea(
-        child: loading
-            ? iceCreamLoader()
-
-            // अगर animated logo use करना हो
-            // : logoLoader()
-
-            : productBody(),
+        child: loading ? iceCreamLoader() : productBody(),
       ),
     );
   }
 
-  /// ICE CREAM LOADER
+  /// LOADER
 
   Widget iceCreamLoader() {
     return Center(
@@ -80,36 +94,6 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  /// LOGO LOADER OPTION
-
-  Widget logoLoader() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          TweenAnimationBuilder(
-            tween: Tween(begin: 0.8, end: 1.2),
-            duration: const Duration(seconds: 1),
-            builder: (context, value, child) {
-              return Transform.scale(
-                scale: value,
-                child: Image.asset(
-                  "assets/logo.jpg",
-                  height: 90,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            "Preparing your treats...",
-            style: TextStyle(color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// PRODUCT BODY
 
   Widget productBody() {
@@ -125,25 +109,69 @@ class _ProductScreenState extends State<ProductScreen> {
       children: [
         /// HEADER
 
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          color: const Color(0xffF6C744),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(
-                children: const [
-                  Icon(Icons.icecream, color: Colors.orange),
-                  SizedBox(width: 8),
-                  Text(
-                    "Yen’s Thai Ice Cream",
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                children: [
+                  Image.asset(
+                    "assets/logo.jpg",
+                    height: 28,
                   ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    "Yen's Thai",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  )
                 ],
               ),
-              const Icon(Icons.shopping_bag_outlined, size: 28),
+              Row(
+                children: [
+                  /// LANGUAGE BUTTON
+
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        english = !english;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        english ? "EN" : "TH",
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  /// REFRESH
+
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: () {
+                      setState(() {
+                        loading = true;
+                      });
+                      fetchProducts();
+                    },
+                  ),
+                ],
+              )
             ],
           ),
         ),
@@ -160,7 +188,7 @@ class _ProductScreenState extends State<ProductScreen> {
               crossAxisCount: crossAxisCount,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
-              childAspectRatio: 0.58,
+              childAspectRatio: 0.5,
             ),
             itemBuilder: (context, index) {
               final product = products[index];
@@ -176,143 +204,189 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  /// PREMIUM PRODUCT CARD
+  /// PRODUCT CARD
 
   Widget productCard(product, String imageUrl) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(.06),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          )
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          /// IMAGE
+    return GestureDetector(
+      onTap: () {
+        showProductDetails(product);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.06),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            )
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            /// IMAGE
 
-          Stack(
-            children: [
-              SizedBox(
-                height: 140,
-                width: double.infinity,
-                child: ClipRRect(
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(22)),
+            SizedBox(
+              height: 150,
+              width: double.infinity,
+              child: ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(22)),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
                   child: Image.network(
                     imageUrl,
-                    fit: BoxFit.cover,
+                    fit: BoxFit.contain,
                   ),
                 ),
               ),
+            ),
 
-              /// PRICE TAG
+            /// TEXT AREA
 
-              Positioned(
-                right: 10,
-                top: 10,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    "\$${product['price']}",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FutureBuilder<String>(
+                      future: translateText(product['name']),
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return Text(product['name']);
+                        }
+
+                        return Text(
+                          snapshot.data!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        );
+                      },
                     ),
-                  ),
-                ),
-              )
-            ],
-          ),
-
-          /// WHITE AREA
-
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product['name'],
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                    const SizedBox(height: 6),
+                    Text(
+                      "\$${product['price']}",
+                      style: const TextStyle(
+                        color: Colors.orange,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-
-                  const SizedBox(height: 6),
-
-                  Text(
-                    product['description'] ?? "",
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
-                    ),
-                  ),
-
-                  const Spacer(),
-
-                  /// ADD TO CART BUTTON
-
-                  GestureDetector(
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text("${product['name']} added to cart"),
-                        ),
-                      );
-                    },
-                    child: Container(
+                    const Spacer(),
+                    Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 9),
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [
-                            Color(0xff2F6FED),
-                            Color(0xff4F8DFF),
-                          ],
-                        ),
+                        color: const Color(0xffF6C744),
                         borderRadius: BorderRadius.circular(25),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blue.withOpacity(.25),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          )
-                        ],
                       ),
                       child: const Center(
                         child: Text(
                           "Add to Cart",
                           style: TextStyle(
-                            color: Colors.white,
+                            color: Colors.black,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
-                    ),
-                  )
-                ],
+                    )
+                  ],
+                ),
               ),
-            ),
-          )
-        ],
+            )
+          ],
+        ),
       ),
+    );
+  }
+
+  /// PRODUCT DETAILS POPUP
+
+  void showProductDetails(product) {
+    String imageUrl = "https://app.yensthai.com${product['imageUrl']}";
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(30),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: AspectRatio(
+                  aspectRatio: 1.6,
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              FutureBuilder<String>(
+                future: translateText(product['name']),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return Text(product['name']);
+                  }
+
+                  return Text(
+                    snapshot.data!,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "\$${product['price']}",
+                style: const TextStyle(
+                  fontSize: 20,
+                  color: Colors.orange,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xffF6C744),
+                  borderRadius: BorderRadius.circular(25),
+                ),
+                child: const Center(
+                  child: Text(
+                    "Add to Cart",
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
     );
   }
 }

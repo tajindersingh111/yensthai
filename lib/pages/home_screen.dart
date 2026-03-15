@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:translator/translator.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,10 +11,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+
   Map customer = {};
   List products = [];
 
   bool loading = true;
+  bool english = false;
+
+  final translator = GoogleTranslator();
 
   @override
   void initState() {
@@ -30,10 +35,35 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// TRANSLATE FUNCTION
+
+  Future<String> translateText(String text) async {
+
+    if (!english) return text;
+
+    try {
+
+      var translated = await translator.translate(
+        text,
+        from: 'th',
+        to: 'en',
+      );
+
+      return translated.text;
+
+    } catch (e) {
+
+      return text;
+
+    }
+
+  }
+
   /// CUSTOMER API
+
   Future fetchCustomer() async {
     final url =
-        Uri.parse("https://app.yensthai.com/api/customers/phone/+447584156695");
+    Uri.parse("https://app.yensthai.com/api/customers/phone/+447584156695");
 
     final res = await http.get(url);
 
@@ -45,6 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// PRODUCTS API
+
   Future fetchProducts() async {
     final url = Uri.parse("https://app.yensthai.com/api/products");
 
@@ -59,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+
     if (loading) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
@@ -66,20 +98,27 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return Scaffold(
+
       backgroundColor: const Color(0xffF5F1EA),
 
       body: SafeArea(
+
         child: SingleChildScrollView(
+
           child: Column(
+
             children: [
+
               /// HEADER
+
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 color: const Color(0xffF6C744),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+
                     Row(
                       children: [
                         Image.asset(
@@ -88,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(width: 10),
                         const Text(
-                          "Yen's Rewards",
+                          "Yen's Thai",
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
@@ -96,11 +135,44 @@ class _HomeScreenState extends State<HomeScreen> {
                         )
                       ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      onPressed: () {
-                        loadData();
-                      },
+
+                    Row(
+                      children: [
+
+                        /// LANGUAGE BUTTON
+
+                        GestureDetector(
+                          onTap: (){
+                            setState(() {
+                              english = !english;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal:10, vertical:6),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              english ? "EN" : "TH",
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width:10),
+
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          onPressed: () {
+                            loadData();
+                          },
+                        ),
+
+                      ],
                     )
                   ],
                 ),
@@ -109,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 12),
 
               /// PROMO BANNER
+
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16),
                 height: 320,
@@ -124,6 +197,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 16),
 
               /// POINTS CARD
+
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16),
                 padding: const EdgeInsets.all(16),
@@ -131,27 +205,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Row(
+                child: const Row(
                   children: [
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade100,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Center(
-                        child: Text(
-                          "50",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
+
+                    SizedBox(width:50,height:50),
+
+                    SizedBox(width:12),
+
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -170,6 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     )
+
                   ],
                 ),
               ),
@@ -177,6 +239,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 16),
 
               /// QR CARD
+
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16),
                 padding: const EdgeInsets.all(16),
@@ -186,28 +249,62 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 child: Row(
                   children: [
+
                     Container(
                       width: 90,
                       height: 90,
                       color: Colors.grey.shade200,
                       child: const Icon(Icons.qr_code),
                     ),
+
                     const SizedBox(width: 12),
+
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          customer['name'] ?? "",
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                          ),
+
+                        FutureBuilder<String>(
+
+                          future: translateText(customer['name'] ?? ""),
+
+                          builder: (context, snapshot) {
+
+                            if (!snapshot.hasData) {
+                              return Text(customer['name'] ?? "");
+                            }
+
+                            return Text(
+                              snapshot.data!,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            );
+
+                          },
+
                         ),
-                        const Text(
-                          "Show this to the barista",
-                          style: TextStyle(
-                            color: Colors.grey,
-                          ),
-                        ),
+
+                        FutureBuilder<String>(
+
+                          future: translateText("Show this to the barista"),
+
+                          builder: (context, snapshot) {
+
+                            if (!snapshot.hasData) {
+                              return const Text("Show this to the barista");
+                            }
+
+                            return Text(
+                              snapshot.data!,
+                              style: const TextStyle(
+                                color: Colors.grey,
+                              ),
+                            );
+
+                          },
+
+                        )
+
                       ],
                     )
                   ],
@@ -219,26 +316,38 @@ class _HomeScreenState extends State<HomeScreen> {
               /// PRODUCT LIST
 
               ListView.builder(
+
                 shrinkWrap: true,
+
                 physics: const NeverScrollableScrollPhysics(),
+
                 itemCount: products.length,
+
                 itemBuilder: (context, index) {
+
                   final product = products[index];
 
                   String imageUrl =
                       "https://app.yensthai.com${product['imageUrl']}";
 
                   return Container(
+
                     margin:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+
                     padding: const EdgeInsets.all(12),
+
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
                     ),
+
                     child: Row(
+
                       children: [
+
                         /// IMAGE
+
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: Image.network(
@@ -252,40 +361,68 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(width: 12),
 
                         /// PRODUCT INFO
+
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                product['name'],
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
+
+                              FutureBuilder<String>(
+
+                                future: translateText(product['name']),
+
+                                builder: (context, snapshot) {
+
+                                  if (!snapshot.hasData) {
+                                    return Text(product['name']);
+                                  }
+
+                                  return Text(
+                                    snapshot.data!,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  );
+
+                                },
+
                               ),
+
                               Text(
-                                "${product['rewardPoints']} Points",
+                                "${product['rewardPoints'] ?? 50} Points",
                                 style: const TextStyle(
                                   color: Colors.grey,
                                 ),
                               ),
+
                             ],
                           ),
                         ),
 
                         const Icon(Icons.more_horiz)
+
                       ],
+
                     ),
+
                   );
+
                 },
+
               ),
 
               const SizedBox(height: 20),
+
             ],
+
           ),
+
         ),
+
       ),
 
-      /// BOTTOM NAV
     );
+
   }
+
 }
