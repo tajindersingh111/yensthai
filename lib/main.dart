@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:yensss/pages/home_page.dart';
+import 'package:yensss/pages/home_screen.dart';
 import 'package:yensss/pages/login_page.dart';
 import 'package:provider/provider.dart';
 import 'controllers/language_controller.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'package:yensss/pages/cart_provider.dart';
 
 void main() async {
-  /// Firebase ke liye zaroori hai
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(
@@ -15,8 +15,11 @@ void main() async {
   );
 
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => LanguageController(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => LanguageController()),
+        ChangeNotifierProvider(create: (_) => CartProvider()),
+      ],
       child: const MyApp(),
     ),
   );
@@ -29,7 +32,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: const HomePage(), // ← pehle login, phir home
+      home: const HomeScreen(),
     );
   }
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "6004964285",
+    "project_id": "yens-5ff6a",
+    "storage_bucket": "yens-5ff6a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:6004964285:android:b56eb9851e5217ffb8b0d4",
+        "android_client_info": {
+          "package_name": "com.example.yensss"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAxFjgp3ruodEGT6L520CWGsVYKjTtPpAw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
