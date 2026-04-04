@@ -1,21 +1,29 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'cart_provider.dart';
 import 'home_page.dart';
 
 class OrderConfirmationPage extends StatefulWidget {
+  final String? orderId;
   final double totalAmount;
   final int earnedPoints;
   final int itemCount;
   final List<CartItem> items;
   final bool apiSuccess;
+  final String orderStatus;
 
   const OrderConfirmationPage({
     super.key,
+    this.orderId,
     required this.totalAmount,
     required this.earnedPoints,
     required this.itemCount,
     required this.items,
     required this.apiSuccess,
+    this.orderStatus = 'confirmed',
   });
 
   @override
@@ -36,12 +44,51 @@ class _OrderConfirmationPageState extends State<OrderConfirmationPage>
     );
     _scaleAnimation = CurvedAnimation(parent: _controller, curve: Curves.elasticOut);
     _controller.forward();
+    final id = widget.orderId;
+    if (id != null) {
+      Future<void>.delayed(const Duration(seconds: 5), () => _markDeliveredIfConfirmed(id));
+    }
+  }
+
+  Future<void> _markDeliveredIfConfirmed(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('local_orders') ?? '[]';
+    final list = jsonDecode(raw) as List<dynamic>;
+    var changed = false;
+    final next = list.map((dynamic o) {
+      final m = Map<String, dynamic>.from(o as Map);
+      if ('${m['id']}' == id && m['status'] == 'confirmed') {
+        m['status'] = 'delivered';
+        changed = true;
+      }
+      return m;
+    }).toList();
+    if (changed) {
+      await prefs.setString('local_orders', jsonEncode(next));
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  String _statusMessage() {
+    switch (widget.orderStatus) {
+      case 'pending':
+        return widget.apiSuccess
+            ? 'Your order is pending confirmation.'
+            : 'Order saved on device. Points will sync when you are back online.';
+      case 'confirmed':
+        return 'Payment received. We are preparing your order.';
+      case 'delivered':
+        return 'Delivered. Thanks for ordering with Yens!';
+      default:
+        return widget.apiSuccess
+            ? 'Your order has been confirmed!'
+            : 'Order saved! Points will sync when connected.';
+    }
   }
 
   @override
@@ -71,16 +118,14 @@ class _OrderConfirmationPageState extends State<OrderConfirmationPage>
               const SizedBox(height: 24),
 
               const Text(
-                "Order Placed! 🎉",
+                "Order placed",
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
               ),
 
               const SizedBox(height: 8),
 
               Text(
-                widget.apiSuccess
-                    ? "Your order has been confirmed!"
-                    : "Order saved! Points will sync when connected.",
+                _statusMessage(),
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.grey, fontSize: 15),
               ),

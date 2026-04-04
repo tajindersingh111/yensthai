@@ -270,13 +270,17 @@
 //   }
 // }
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:yensss/pages/rate_experience_screen.dart';
-import 'package:yensss/pages/login_page.dart';
-import 'rate_experience_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../core/session_service.dart';
+import 'edit_profile_page.dart';
+import 'login_page.dart';
+import 'rate_experience_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -358,14 +362,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
     localOrders = json.decode(ordersJson);
   }
 
-  int get totalLocalPoints {
-    return localOrders.fold(0, (sum, order) => sum + (order['earnedPoints'] as int? ?? 0));
-  }
-
   int get totalPoints {
     final apiPoints = customer['points'] ?? 0;
     final unsynced = localOrders.where((o) => o['synced'] == false).fold(0, (sum, o) => sum + (o['earnedPoints'] as int? ?? 0));
     return apiPoints + unsynced;
+  }
+
+  Color _orderStatusChipColor(String status, bool synced) {
+    if (!synced) return Colors.orange.shade800;
+    switch (status) {
+      case 'delivered':
+        return Colors.blue.shade700;
+      case 'confirmed':
+        return Colors.green.shade700;
+      case 'pending':
+        return Colors.deepOrange.shade700;
+      default:
+        return Colors.grey.shade700;
+    }
+  }
+
+  String _orderStatusLabel(String status, bool synced) {
+    if (!synced) return 'Sync pending';
+    switch (status) {
+      case 'delivered':
+        return 'Delivered';
+      case 'confirmed':
+        return 'Confirmed';
+      case 'pending':
+        return 'Pending';
+      default:
+        return 'Placed';
+    }
   }
 
   void showLogoutDialog() {
@@ -419,14 +447,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                           ),
                           onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            await prefs.clear();
-                            if (!context.mounted) return;
                             Navigator.pop(context);
+                            await SessionService.instance.logout();
+                            if (!context.mounted) return;
                             Navigator.pushAndRemoveUntil(
                               context,
                               MaterialPageRoute(builder: (context) => const LoginPage()),
-                                  (route) => false,
+                              (route) => false,
                             );
                           },
                           child: const Text("Yes, logout", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF412402))),
@@ -511,6 +538,78 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     fontWeight: FontWeight.bold,
                     color: tier == 'gold' ? Colors.amber.shade800 : tier == 'silver' ? Colors.grey.shade700 : Colors.brown,
                   ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  FilledButton.tonal(
+                    onPressed: () async {
+                      final ok = await Navigator.push<bool>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => EditProfilePage(
+                            initialName: name,
+                            initialEmail: '${customer['email'] ?? ''}',
+                            initialBirthday: birthday,
+                          ),
+                        ),
+                      );
+                      if (ok == true && mounted) {
+                        setState(() => loading = true);
+                        await loadProfile();
+                      }
+                    },
+                    child: const Text('Edit profile'),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              /// MEMBER QR
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade200),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: QrImageView(
+                        data: customerId.isNotEmpty ? customerId : phone,
+                        version: QrVersions.auto,
+                        size: 80,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Your member QR', style: TextStyle(fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Scan at the counter to earn and redeem points.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
 
@@ -614,9 +713,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     final order = localOrders[index];
                     final List items = order['items'] ?? [];
                     final bool synced = order['synced'] ?? false;
+                    final status = order['status']?.toString() ?? 'pending';
                     final String date = order['date'] != null
                         ? DateTime.parse(order['date']).toLocal().toString().substring(0, 16)
                         : "";
+                    final chipColor = _orderStatusChipColor(status, synced);
 
                     return Container(
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -624,7 +725,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: synced ? Colors.green.shade100 : Colors.orange.shade100),
+                        border: Border.all(color: chipColor.withOpacity(0.35)),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -637,12 +738,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
-                                  color: synced ? Colors.green.shade50 : Colors.orange.shade50,
+                                  color: chipColor.withOpacity(0.12),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
-                                  synced ? "Synced" : "Pending",
-                                  style: TextStyle(fontSize: 11, color: synced ? Colors.green : Colors.orange, fontWeight: FontWeight.w600),
+                                  _orderStatusLabel(status, synced),
+                                  style: TextStyle(fontSize: 11, color: chipColor, fontWeight: FontWeight.w600),
                                 ),
                               ),
                             ],

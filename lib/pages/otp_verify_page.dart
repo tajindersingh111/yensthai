@@ -1,18 +1,20 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart';
+
+import '../core/session_service.dart';
 import 'home_page.dart';
 
 class OtpVerifyPage extends StatefulWidget {
-  final String phone;
-  final Map customerData;
-
   const OtpVerifyPage({
     super.key,
     required this.phone,
     required this.customerData,
   });
+
+  final String phone;
+  final Map<String, dynamic> customerData;
 
   @override
   State<OtpVerifyPage> createState() => _OtpVerifyPageState();
@@ -126,11 +128,10 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
     try {
       await FirebaseAuth.instance.signInWithCredential(credential);
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('customer_id', widget.customerData['id'] ?? '');
-      await prefs.setString('customer_name', widget.customerData['name'] ?? '');
-      await prefs.setString('customer_phone', widget.customerData['phone'] ?? '');
-      await prefs.setBool('is_logged_in', true);
+      await SessionService.instance.persistCustomerSession(
+        customerData: widget.customerData,
+        firebaseUser: FirebaseAuth.instance.currentUser,
+      );
 
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(

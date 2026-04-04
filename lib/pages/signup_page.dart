@@ -332,10 +332,10 @@
 //   }
 // }
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'login_page.dart';
+
 import 'otp_verify_page.dart';
 
 class SignupPage extends StatefulWidget {
@@ -405,9 +405,15 @@ class _SignupPageState extends State<SignupPage> {
       if (res.statusCode == 200 || res.statusCode == 201) {
         final data = json.decode(res.body);
         if (!mounted) return;
-        Navigator.pushReplacement(context, MaterialPageRoute(
-          builder: (context) => OtpVerifyPage(phone: phoneController.text.trim(), customerData: data),
-        ));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OtpVerifyPage(
+              phone: phoneController.text.trim(),
+              customerData: Map<String, dynamic>.from(data as Map),
+            ),
+          ),
+        );
       } else {
         final data = json.decode(res.body);
         setState(() => errorMessage = data['message'] ?? "Signup failed. Please try again.");

@@ -290,7 +290,7 @@ class _LoginPageState extends State<LoginPage> {
           MaterialPageRoute(
             builder: (context) => OtpVerifyPage(
               phone: formattedPhone,
-              customerData: data,
+              customerData: Map<String, dynamic>.from(data as Map),
             ),
           ),
         );
