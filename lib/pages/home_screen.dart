@@ -1,19 +1,22 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:translator/translator.dart';
-
-import '../controllers/main_nav_controller.dart';
-import '../core/app_config.dart';
-import '../core/time_offers.dart';
-import '../data/local/rewards_local_store.dart';
-import '../data/repositories/yens_repository.dart';
-import '../presentation/widgets/error_retry_view.dart';
+import 'package:yensss/controllers/main_nav_controller.dart';
+import 'package:yensss/core/yens_theme.dart';
+import 'package:yensss/data/local/rewards_local_store.dart';
+import 'package:yensss/data/repositories/yens_repository.dart';
+import 'package:yensss/presentation/widgets/error_retry_view.dart';
+import 'package:yensss/presentation/widgets/home_promo_carousel.dart';
+import 'package:yensss/presentation/widgets/product_menu_card.dart';
+import 'package:yensss/widgets/yens_app_drawer.dart';
+import 'package:yensss/widgets/yens_decorative_shapes.dart';
+import 'package:yensss/widgets/yens_main_header.dart';
 import 'cart_page.dart';
 import 'cart_provider.dart';
-import 'profile_screen.dart';
+import 'package:yensss/pages/product_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,41 +25,73 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final _translator = GoogleTranslator();
-  List<dynamic> _products = [];
-  List<HomeBanner> _banners = [];
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final TextEditingController _search = TextEditingController();
+
+  List<Map<String, dynamic>> _products = [];
   Map<String, dynamic> _customer = {};
   String _loggedInPhone = '';
+  String _activeStore = '';
   bool _loading = true;
   String? _error;
-  bool _english = false;
-  int _bannerIndex = 0;
-  int _streakDays = 0;
+  Set<String> _favoriteIds = {};
+  int _featuredIndex = 0;
+  int _promoRefreshKey = 0; // incremented on pull-to-refresh to force carousel rebuild
 
-  final _categories = const [
-    {'id': 'all', 'label': 'All', 'icon': Icons.grid_view_rounded},
-    {'id': 'fruit_tea', 'label': 'Fruit tea', 'icon': Icons.local_bar},
-    {'id': 'milk_tea', 'label': 'Milk tea', 'icon': Icons.coffee},
-    {'id': 'shakes', 'label': 'Shakes', 'icon': Icons.blender},
-    {'id': 'soft_serve', 'label': 'Soft serve', 'icon': Icons.icecream},
-    {'id': 'sundaes', 'label': 'Sundaes', 'icon': Icons.icecream_outlined},
-  ];
+  // ── Greeting ──────────────────────────────────────────────────────────────
+  late String _greeting;
+  Timer? _greetingTimer;
+
+  /// Computes greeting from device local time (5-12 morning, 12-17 afternoon,
+  /// 17-22 evening, otherwise night). Never uses a fixed/mocked timestamp.
+  String _computeGreeting() {
+    final hour = DateTime.now().toLocal().hour;
+    if (hour >= 5 && hour < 12) return 'Good Morning';
+    if (hour >= 12 && hour < 17) return 'Good Afternoon';
+    if (hour >= 17 && hour < 22) return 'Good Evening';
+    return 'Good Night';
+  }
+
+  /// Schedules the greeting timer to fire at the start of the next hour.
+  void _scheduleGreetingRefresh() {
+    _greetingTimer?.cancel();
+    final now = DateTime.now().toLocal();
+    // Time until the next full hour (+ 1 second buffer).
+    final nextHour = DateTime(now.year, now.month, now.day, now.hour + 1);
+    final delay = nextHour.difference(now) + const Duration(seconds: 1);
+    _greetingTimer = Timer(delay, () {
+      if (mounted) setState(() => _greeting = _computeGreeting());
+      _scheduleGreetingRefresh(); // reschedule for following hour
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _greeting = _computeGreeting();
+    _scheduleGreetingRefresh();
     _load();
+    RewardsLocalStore.favoriteIds().then((ids) {
+      if (mounted) setState(() => _favoriteIds = ids.toSet());
+    });
   }
 
-  Future<String> _tr(String text) async {
-    if (!_english) return text;
-    try {
-      final t = await _translator.translate(text, from: 'th', to: 'en');
-      return t.text;
-    } catch (_) {
-      return text;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Recalculate greeting when app returns to foreground.
+    if (state == AppLifecycleState.resumed && mounted) {
+      setState(() => _greeting = _computeGreeting());
     }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _greetingTimer?.cancel();
+    _search.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -67,175 +102,313 @@ class _HomeScreenState extends State<HomeScreen> {
     final repo = context.read<YensRepository>();
     final prefs = await SharedPreferences.getInstance();
     _loggedInPhone = prefs.getString('customer_phone') ?? '';
+    _activeStore = prefs.getString('yens_active_pickup_store') ?? '';
+
+    // Invalidate weekly special cache so the carousel re-fetches on pull-to-refresh
+    repo.invalidateWeeklySpecialCache();
+    if (mounted) setState(() => _promoRefreshKey++);
 
     try {
-      final streak = await RewardsLocalStore.recordDailyVisit();
-      final banners = await repo.fetchHomeBanners();
-      final products = await repo.fetchProducts();
-      Map<String, dynamic> customer = {};
-      if (_loggedInPhone.isNotEmpty) {
-        final c = await repo.fetchCustomerByPhone(_loggedInPhone);
-        if (c != null) customer = c;
+      final raw = await repo.fetchProducts();
+      if (mounted) {
+        setState(() {
+          _products = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          _featuredIndex = 0;
+          _loading = false;
+        });
       }
-      if (!mounted) return;
-      setState(() {
-        _streakDays = streak;
-        _banners = banners;
-        _products = products;
-        _customer = customer;
-        _loading = false;
-      });
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Products: ${e.toString()}';
+          _loading = false;
+        });
+      }
+      return;
+    }
+
+    if (_loggedInPhone.isNotEmpty) {
+      try {
+        final c = await repo.fetchCustomerByPhone(_loggedInPhone);
+        if (c != null && mounted) {
+          setState(() => _customer = c);
+        }
+      } catch (_) {}
     }
   }
 
-  String get _qrPayload {
-    final id = _customer['id'];
-    if (id != null && '$id'.isNotEmpty) return '$id';
-    if (_loggedInPhone.isNotEmpty) return _loggedInPhone;
-    return 'yens_guest';
-  }
-
   int get _points => (_customer['points'] as num?)?.toInt() ?? 0;
-
-  int get _pointsUntilNext {
-    final next = ((_points ~/ 100) + 1) * 100;
-    return next - _points;
-  }
-
-  List<dynamic> get _previewProducts => _products.take(8).toList();
-
-  void _openMenuWithCategory(String categoryId) {
-    context.read<MainNavController>().goToTab(1, menuCategoryId: categoryId == 'all' ? null : categoryId);
-  }
+  String get _name => _customer['name']?.toString() ?? 'Boutique Guest';
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xffF5C021))));
+      return const Scaffold(
+        backgroundColor: YensTheme.cream,
+        body: Center(child: CircularProgressIndicator(color: YensTheme.navy, strokeWidth: 3)),
+      );
     }
     if (_error != null) {
       return Scaffold(
-        backgroundColor: const Color(0xffF5F1EA),
-        body: ErrorRetryView(message: 'We could not load your home feed.', onRetry: _load),
+        backgroundColor: YensTheme.cream,
+        body: ErrorRetryView(
+          message: 'We could not load the menu.',
+          onRetry: _load,
+        ),
       );
     }
 
     return Consumer<CartProvider>(
       builder: (context, cart, _) {
         return Scaffold(
-          backgroundColor: const Color(0xffF5F1EA),
+          key: _scaffoldKey,
+          backgroundColor: Colors.white, // Pure white background for parts of the new design
+          drawer: YensAppDrawer(customerName: _name),
           body: SafeArea(
             child: RefreshIndicator(
-              color: const Color(0xffF5C021),
-              onRefresh: () => _load(),
+              color: YensTheme.navy,
+              onRefresh: _load,
               child: CustomScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
                 slivers: [
-                  SliverToBoxAdapter(child: _header(cart)),
-                  SliverToBoxAdapter(child: _bannerCarousel()),
-                  SliverToBoxAdapter(child: _timeOffersSection()),
-                  SliverToBoxAdapter(child: _pointsCard()),
-                  SliverToBoxAdapter(child: _qrCard(context)),
-                  SliverToBoxAdapter(child: _categoryRow()),
-                  SliverToBoxAdapter(child: _sectionTitle('Menu preview')),
-                  SliverToBoxAdapter(child: _previewList(cart)),
-                  const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                  // 1. DYNAMIC GREETING & STORE FINDER
+                  SliverToBoxAdapter(child: _buildGreetingHeader()),
+                  
+                  // 2. QUICK ACTIONS
+                  SliverToBoxAdapter(child: _buildQuickActions()),
+                  
+                  // 3. LOYALTY STATUS CARD (Premium Navy)
+                  SliverToBoxAdapter(child: _buildLoyaltyStatusCard()),
+                  
+                  // 4. NEWS & PROMOTION HEADER
+                  SliverToBoxAdapter(child: _buildSectionHeader('NEWS & PROMOTION')),
+                  
+                  // 5. PROMO CAROUSEL
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10, bottom: 30),
+                      child: HomePromoCarousel(
+                        key: ValueKey(_promoRefreshKey),
+                        featuredProduct: _products.isNotEmpty ? _products[0] : null,
+                        onProductTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const ProductScreen(isPushed: true),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+
+                  // 6. BESTSELLERS SECTION
+                  SliverToBoxAdapter(
+                    child: _horizontalProductSection('Top Bestsellers', _bestsellers, cart, badge: 'BESTSELLER'),
+                  ),
+
+                  const SliverToBoxAdapter(child: SizedBox(height: 32)),
+
+                  // 7. FOOTER
+                  SliverToBoxAdapter(child: _homeFooter()),
+                  
+                  const SliverToBoxAdapter(child: SizedBox(height: 60)),
                 ],
               ),
             ),
           ),
-          floatingActionButton: cart.itemCount > 0
-              ? Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: GestureDetector(
-                    onTap: () => Navigator.push<void>(
-                      context,
-                      MaterialPageRoute<void>(builder: (_) => const CartPage()),
-                    ),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xffF5C021),
-                        borderRadius: BorderRadius.circular(30),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 10, offset: const Offset(0, 4)),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.shopping_cart, color: Colors.white),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${cart.itemCount} · ฿${cart.totalPrice.toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                )
-              : null,
         );
       },
     );
   }
 
-  Widget _header(CartProvider cart) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      color: const Color(0xffF6C744),
-      child: Row(
-        children: [
-          Image.asset('assets/logo.jpg', height: 30),
-          const SizedBox(width: 10),
-          Text(
-            AppConfig.appDisplayName,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
-          ),
-          const Spacer(),
-          GestureDetector(
-            onTap: () => setState(() => _english = !_english),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-              child: Text(_english ? 'EN' : 'TH', style: const TextStyle(fontWeight: FontWeight.bold)),
+  Widget _buildGreetingHeader() {
+    return Column(
+      children: [
+        ClipPath(
+          clipper: YensHeaderWaveClipper(),
+          child: Container(
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, YensTheme.yellow],
+                stops: [0.3, 1],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(builder: (_) => const CartPage()),
-            ),
-            child: Stack(
-              clipBehavior: Clip.none,
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 60),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                  child: const Icon(Icons.shopping_cart_outlined, size: 22),
-                ),
-                if (cart.itemCount > 0)
-                  Positioned(
-                    right: -2,
-                    top: -2,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                      child: Text(
-                        '${cart.itemCount}',
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                // Icons Row: [Logo] [Spacer] [Language] [Bell] [Menu]
+                Row(
+                  children: [
+                    // Yens Logo on far left
+                    ClipOval(
+                      child: Image.asset(
+                        'assets/logo.jpg',
+                        width: 44, height: 44,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const Icon(Icons.icecream, color: YensTheme.navy),
                       ),
                     ),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: YensTheme.navy.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'v3',
+                        style: GoogleFonts.outfit(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: YensTheme.navy,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    // Tools Group: Language -> Bell -> Cart -> Menu
+                    const LanguageToggleButton(),
+                    const SizedBox(width: 8),
+                    const NotificationBellButton(),
+                    const SizedBox(width: 8),
+                    const _HomeScreenCartButton(), // NEW Cart button
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                      icon: const Icon(Icons.menu_rounded, color: YensTheme.navy, size: 28),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                Text(
+                  '$_greeting, \n$_name',
+                  style: GoogleFonts.outfit(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: YensTheme.navy,
+                    height: 1.2,
                   ),
+                ),
               ],
+            ),
+          ),
+        ),
+        // Find Store (Outside the wave for better visibility)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: InkWell(
+            onTap: () => _showPickupSheet(context),
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: YensTheme.yellow, width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: YensTheme.navy.withOpacity(0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on_rounded, color: YensTheme.navy, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _activeStore.isNotEmpty 
+                          ? 'Pickup from: $_activeStore' 
+                          : 'Find a store / Select pickup location',
+                      style: GoogleFonts.outfit(
+                        color: YensTheme.navy,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const Icon(Icons.arrow_forward_ios_rounded, color: YensTheme.navy, size: 14),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuickActions() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 40),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _quickActionItem(
+            'Instore',
+            Icons.qr_code_scanner_rounded,
+            () => _showPayInStoreSheet(context),
+          ),
+          _quickActionItem(
+            'Delivery',
+            Icons.delivery_dining_rounded,
+            () => _showDeliverySheet(context),
+          ),
+          _quickActionItem(
+            'In-store Pickup',
+            Icons.storefront_rounded,
+            () => _showPickupSheet(context),
+          ),
+          _quickActionItem(
+            'Order to Table',
+            Icons.table_restaurant_rounded,
+            () => _showOrderToTableSheet(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _quickActionItem(String label, IconData icon, VoidCallback onTap) {
+    return SizedBox(
+      width: 80,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Material(
+            color: YensTheme.yellow,
+            shape: const CircleBorder(),
+            elevation: 2,
+            shadowColor: YensTheme.yellow.withOpacity(0.3),
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              splashColor: YensTheme.navy.withOpacity(0.15),
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: Icon(icon, color: YensTheme.navy, size: 26),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.outfit(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: YensTheme.navy,
+              height: 1.25,
             ),
           ),
         ],
@@ -243,322 +416,622 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _bannerCarousel() {
-    final h = 200.0;
-    return Column(
-      children: [
-        const SizedBox(height: 12),
-        SizedBox(
-          height: h,
-          child: PageView.builder(
-            itemCount: _banners.length,
-            onPageChanged: (i) => setState(() => _bannerIndex = i),
-            itemBuilder: (context, i) {
-              final b = _banners[i];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (b.isAssetFallback || b.imageUrl.isEmpty)
-                        Image.asset('assets/yens.png', fit: BoxFit.cover)
-                      else
-                        CachedNetworkImage(imageUrl: b.imageUrl, fit: BoxFit.cover),
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.bottomCenter,
-                            end: Alignment.topCenter,
-                            colors: [Colors.black.withOpacity(0.55), Colors.transparent],
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: 16,
-                        right: 16,
-                        bottom: 16,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              b.title,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            if (b.subtitle.isNotEmpty)
-                              Text(
-                                b.subtitle,
-                                style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 13),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(
-            _banners.length,
-            (i) => AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              width: _bannerIndex == i ? 18 : 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: _bannerIndex == i ? const Color(0xffF5C021) : Colors.grey.shade400,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _timeOffersSection() {
-    final offers = offersForNow();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              const Text(
-                'Time-based offers',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(width: 8),
-              if (_streakDays > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xffFEF3D0),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Streak $_streakDays d',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xffBA7517)),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 112,
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            scrollDirection: Axis.horizontal,
-            itemCount: offers.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, i) {
-              final o = offers[i];
-              return Container(
-                width: 260,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 12, offset: const Offset(0, 4))],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: o.accent.withOpacity(0.2), shape: BoxShape.circle),
-                      child: Icon(o.icon, color: o.accent.darken()),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: o.accent.withOpacity(0.25),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              o.badge,
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: o.accent.darken()),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(o.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          Text(
-                            o.subtitle,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _pointsCard() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
+  void _showPayInStoreSheet(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('customer_name') ?? 'Guest User';
+    final phone = prefs.getString('customer_phone') ?? 'Not Available';
+    
+    if (!context.mounted) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10)],
+          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
         ),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 50,
-              height: 50,
-              decoration: const BoxDecoration(color: Color(0xffFEF3D0), shape: BoxShape.circle),
-              child: const Icon(Icons.stars, color: Color(0xffBA7517)),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
+            const SizedBox(height: 24),
+            Text(
+              'Loyalty Card QR',
+              style: GoogleFonts.outfit(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: YensTheme.navy,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Scan this code at the counter to collect stars and redeem rewards.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.outfit(
+                fontSize: 13,
+                color: Colors.grey.shade500,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 32),
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: YensTheme.yellowSoft,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: YensTheme.yellow, width: 2),
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '$_pointsUntilNext pts to next reward',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  Container(
+                    width: 160,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    padding: const EdgeInsets.all(16),
+                    child: CustomPaint(
+                      painter: _MockQrPainter(),
+                    ),
                   ),
+                  const SizedBox(height: 20),
                   Text(
-                    '$_points pts · keep your streak for bonus multipliers',
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                    name,
+                    style: GoogleFonts.outfit(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: YensTheme.navy,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    phone,
+                    style: GoogleFonts.outfit(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: YensTheme.navy.withOpacity(0.6),
+                    ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context),
+                style: FilledButton.styleFrom(
+                  backgroundColor: YensTheme.navy,
+                  foregroundColor: YensTheme.yellow,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: Text(
+                  'DONE',
+                  style: GoogleFonts.outfit(fontWeight: FontWeight.w900, letterSpacing: 1.0),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
           ],
         ),
       ),
     );
   }
 
-  Widget _qrCard(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.push<void>(
-            context,
-            MaterialPageRoute<void>(builder: (_) => const ProfileScreen()),
-          ),
-          child: Ink(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
+  void _showDeliverySheet(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    String savedAddress = '';
+    String savedDistrict = '';
+    String savedNote = '';
+    
+    final raw = prefs.getString('yens_default_address');
+    if (raw != null) {
+      try {
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        savedAddress = m['line1'] ?? '';
+        savedDistrict = m['district'] ?? '';
+        savedNote = m['note'] ?? '';
+      } catch (_) {}
+    }
+    
+    final addressController = TextEditingController(text: savedAddress);
+    final districtController = TextEditingController(text: savedDistrict);
+    final noteController = TextEditingController(text: savedNote);
+    
+    if (!context.mounted) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10)],
+              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade200),
+            padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 30),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
                   ),
-                  child: QrImageView(
-                    data: _qrPayload,
-                    version: QrVersions.auto,
-                    size: 80,
-                    backgroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 24),
+                  Row(
                     children: [
-                      Text(
-                        '${_customer['name'] ?? 'Member'}',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: YensTheme.yellow.withOpacity(0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.delivery_dining_rounded, color: YensTheme.navy, size: 24),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${_customer['phone'] ?? _loggedInPhone}',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(Icons.touch_app, size: 14, color: Colors.orange.shade700),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Open profile & order history',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Delivery Details',
+                          style: GoogleFonts.outfit(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: YensTheme.navy,
                           ),
-                        ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          addressController.clear();
+                          districtController.clear();
+                          noteController.clear();
+                          setModalState(() {});
+                        },
+                        child: Text(
+                          'Change',
+                          style: GoogleFonts.outfit(
+                            color: YensTheme.navy,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                ),
-                Icon(Icons.chevron_right, color: Colors.grey.shade400),
-              ],
+                  const SizedBox(height: 24),
+                  Text(
+                    'STREET ADDRESS',
+                    style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey.shade500, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: addressController,
+                    style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      hintText: 'Building, Floor, Unit #',
+                      filled: true,
+                      fillColor: YensTheme.cream,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'DISTRICT / AREA',
+                    style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey.shade500, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: districtController,
+                    style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Pathum Wan, Bangkok',
+                      filled: true,
+                      fillColor: YensTheme.cream,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'BARISTA NOTE',
+                    style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey.shade500, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteController,
+                    style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Leave with security, extra ice please',
+                      filled: true,
+                      fillColor: YensTheme.cream,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: FilledButton(
+                      onPressed: () async {
+                        final addr = addressController.text.trim();
+                        final dist = districtController.text.trim();
+                        final nte = noteController.text.trim();
+                        
+                        if (addr.isEmpty || dist.isEmpty) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: const Text('Please enter street address and district.'),
+                              backgroundColor: Colors.red.shade700,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                          return;
+                        }
+                        
+                        await prefs.setString(
+                          'yens_default_address',
+                          jsonEncode({
+                            'line1': addr,
+                            'district': dist,
+                            'note': nte,
+                          }),
+                        );
+                        
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Delivery address set to: $addr, $dist!'),
+                            behavior: SnackBarBehavior.floating,
+                            backgroundColor: YensTheme.navy,
+                          ),
+                        );
+                        
+                        context.read<MainNavController>().goToTab(2);
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: YensTheme.yellow,
+                        foregroundColor: YensTheme.navy,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
+                      child: Text(
+                        'CONFIRM DELIVERY ADDRESS',
+                        style: GoogleFonts.outfit(fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 
-  Widget _categoryRow() {
-    return SizedBox(
-      height: 96,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        scrollDirection: Axis.horizontal,
-        itemCount: _categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (context, i) {
-          final c = _categories[i];
-          return GestureDetector(
-            onTap: () => _openMenuWithCategory(c['id']! as String),
-            child: Column(
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8)],
+  void _showPickupSheet(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final selectedStore = prefs.getString('yens_active_pickup_store') ?? '';
+    
+    if (!context.mounted) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return FutureBuilder<List<dynamic>>(
+              future: ctx.read<YensRepository>().fetchSites(),
+              builder: (context, snapshot) {
+                Widget content;
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  content = const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: CircularProgressIndicator(color: YensTheme.navy),
+                    ),
+                  );
+                } else if (snapshot.hasError) {
+                  content = SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Text(
+                        'Failed to load stores.',
+                        style: GoogleFonts.outfit(color: Colors.red.shade700, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  );
+                } else {
+                  final List<dynamic> sitesList = snapshot.data ?? [];
+                  if (sitesList.isEmpty) {
+                    content = SizedBox(
+                      height: 200,
+                      child: Center(
+                        child: Text(
+                          'No stores available.',
+                          style: GoogleFonts.outfit(color: Colors.grey.shade600, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    );
+                  } else {
+                    content = ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: sitesList.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (context, idx) {
+                        final site = sitesList[idx] as Map<String, dynamic>;
+                        final name = site['name']?.toString() ?? 'Yens Store';
+                        final location = site['location']?.toString() ?? 'Bangkok';
+                        final isSelected = selectedStore == name;
+                        
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: isSelected ? YensTheme.yellowSoft : Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isSelected ? YensTheme.yellow : Colors.grey.shade200,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: ListTile(
+                            onTap: () async {
+                              await prefs.setString('yens_active_pickup_store', name);
+                              
+                              if (mounted) {
+                                setState(() {
+                                  _activeStore = name;
+                                });
+                              }
+                              
+                              if (!ctx.mounted) return;
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Pickup store set to: $name!'),
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: YensTheme.navy,
+                                ),
+                              );
+                              context.read<MainNavController>().goToTab(2);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const ProductScreen(isPushed: true),
+                                ),
+                              );
+                            },
+                            leading: Icon(
+                              Icons.location_on_rounded,
+                              color: isSelected ? YensTheme.navy : Colors.grey.shade400,
+                            ),
+                            title: Text(
+                              name,
+                              style: GoogleFonts.outfit(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 15,
+                                color: YensTheme.navy,
+                              ),
+                            ),
+                            subtitle: Text(
+                              location,
+                              style: GoogleFonts.outfit(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            trailing: isSelected 
+                              ? const Icon(Icons.check_circle_rounded, color: YensTheme.navy)
+                              : const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                          ),
+                        );
+                      },
+                    );
+                  }
+                }
+
+                return Container(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.75,
                   ),
-                  child: Icon(c['icon'] as IconData, color: const Color(0xffF5C021)),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade300,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: YensTheme.yellow.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.storefront_rounded, color: YensTheme.navy, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          Text(
+                            'Select Pickup Store',
+                            style: GoogleFonts.outfit(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: YensTheme.navy,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Flexible(child: content),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showOrderToTableSheet(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final activeTable = prefs.getString('yens_active_table') ?? '';
+    
+    final tableController = TextEditingController(text: activeTable);
+    
+    if (!context.mounted) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+            ),
+            padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 30),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: YensTheme.yellow.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.table_restaurant_rounded, color: YensTheme.navy, size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    Text(
+                      'Order to Table',
+                      style: GoogleFonts.outfit(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: YensTheme.navy,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
                 Text(
-                  c['label']! as String,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  'TABLE NUMBER (1 - 50)',
+                  style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey.shade500, letterSpacing: 0.5),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: tableController,
+                  keyboardType: TextInputType.number,
+                  style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w900, fontSize: 18),
+                  decoration: InputDecoration(
+                    hintText: 'Enter table number, e.g. 12',
+                    filled: true,
+                    fillColor: YensTheme.cream,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: FilledButton(
+                    onPressed: () async {
+                      final tableNum = tableController.text.trim();
+                      if (tableNum.isEmpty) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(
+                            content: const Text('Please enter a valid table number.'),
+                            backgroundColor: Colors.red.shade700,
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                        return;
+                      }
+                      
+                      await prefs.setString('yens_active_table', tableNum);
+                      
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Table #$tableNum selected! Routing to menu...'),
+                          behavior: SnackBarBehavior.floating,
+                          backgroundColor: YensTheme.navy,
+                        ),
+                      );
+                      
+                      context.read<MainNavController>().goToTab(2);
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: YensTheme.yellow,
+                      foregroundColor: YensTheme.navy,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                    ),
+                    child: Text(
+                      'CONFIRM TABLE NUMBER',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -568,142 +1041,360 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _sectionTitle(String t) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 10),
-      child: Row(
+  Widget _buildLoyaltyStatusCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: YensTheme.yellow, // Switched to Yellow as requested
+        borderRadius: BorderRadius.circular(32),
+        boxShadow: [
+          BoxShadow(color: YensTheme.yellow.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(t, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const Spacer(),
-          TextButton(
-            onPressed: () => context.read<MainNavController>().goToTab(1),
-            child: const Text('Full menu'),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    _points >= 400 ? 'Platinum' : (_points >= 150 ? 'Gold' : 'Silver'),
+                    style: GoogleFonts.outfit(
+                      color: YensTheme.navy,
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '$_points',
+                    style: GoogleFonts.outfit(
+                      color: YensTheme.navy,
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.stars_rounded, color: YensTheme.navy, size: 28),
+                ],
+              ),
+              const Icon(Icons.arrow_forward_ios_rounded, color: YensTheme.navy, size: 20),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Points earned for Yens Rewards',
+            style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 32),
+          
+          _buildProgressBar(),
+          
+          const SizedBox(height: 48),
+          
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Free Size Upgrade',
+                      style: GoogleFonts.outfit(color: YensTheme.navy, fontSize: 18, fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Get a free upsize on your favorite drinks today.',
+                      style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.6), fontSize: 13, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Image.asset('assets/logo.jpg', height: 60, opacity: const AlwaysStoppedAnimation(0.8)),
+            ],
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () {},
+            style: ElevatedButton.styleFrom(
+              backgroundColor: YensTheme.navy, // Swapped: Button is now Navy
+              foregroundColor: YensTheme.yellow, // Text is Yellow
+              elevation: 4,
+              shadowColor: YensTheme.navy.withOpacity(0.3),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            ),
+            child: Text(
+              'REDEEM 80 STARS',
+              style: GoogleFonts.outfit(fontWeight: FontWeight.w900, letterSpacing: 1.0),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _previewList(CartProvider cart) {
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: _previewProducts.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final product = _previewProducts[index] as Map<String, dynamic>;
-        final imageUrl = AppConfig.mediaUrl(product['imageUrl']?.toString());
-        final price = double.tryParse('${product['price']}') ?? 0;
-        final rewardPts = (product['rewardPoints'] as num?)?.toInt() ?? price.round();
-        final id = '${product['id']}';
-        final inCart = cart.isInCart(id);
-        final qty = cart.quantityOf(id);
-
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: SizedBox(
-                  width: 64,
-                  height: 64,
-                  child: imageUrl.isEmpty
-                      ? Container(color: Colors.grey.shade200)
-                      : CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover),
-                ),
+  Widget _buildProgressBar() {
+    final List<int> milestones = [20, 60, 120, 160, 350, 500];
+    return Column(
+      children: [
+        Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            Container(
+              height: 4,
+              width: double.infinity,
+              decoration: BoxDecoration(color: YensTheme.navy.withOpacity(0.1), borderRadius: BorderRadius.circular(2)),
+            ),
+            FractionallySizedBox(
+              widthFactor: (_points / 500).clamp(0.0, 1.0),
+              child: Container(
+                height: 4,
+                decoration: BoxDecoration(color: YensTheme.navy, borderRadius: BorderRadius.circular(2)),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    FutureBuilder<String>(
-                      future: _tr('${product['name']}'),
-                      builder: (_, s) => Text(
-                        s.data ?? '${product['name']}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(
-                      '฿${price.toStringAsFixed(0)}',
-                      style: const TextStyle(color: Color(0xffF5C021), fontWeight: FontWeight.bold),
-                    ),
-                    Text('+$rewardPts pts', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                  ],
-                ),
-              ),
-              if (inCart)
-                Row(
-                  children: [
-                    _roundIcon(Icons.remove, () => cart.removeItem(id), Colors.grey.shade200, Colors.black),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Text('$qty', style: const TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                    _roundIcon(Icons.add, () => _add(cart, product), const Color(0xffF5C021), Colors.white),
-                  ],
-                )
-              else
-                TextButton(
-                  onPressed: () => _add(cart, product),
-                  style: TextButton.styleFrom(
-                    backgroundColor: const Color(0xffF5C021),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: milestones.map((m) {
+                final active = _points >= m;
+                return Container(
+                  width: 12, height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: active ? YensTheme.navy : Colors.white,
+                    border: Border.all(color: active ? YensTheme.navy : YensTheme.navy.withOpacity(0.2), width: 2),
                   ),
-                  child: const Text('Add'),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: milestones.map((m) => Text(
+            '$m',
+            style: GoogleFonts.outfit(color: _points >= m ? YensTheme.navy : YensTheme.navy.withOpacity(0.3), fontSize: 11, fontWeight: FontWeight.bold),
+          )).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 40, 24, 0),
+      child: UnconstrainedBox(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: YensTheme.yellow,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            title,
+            style: GoogleFonts.outfit(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: YensTheme.navy,
+              letterSpacing: 1.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _horizontalProductSection(String title, List<Map<String, dynamic>> items, CartProvider cart, {String? badge, Color? badgeColor}) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+          child: UnconstrainedBox(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: YensTheme.yellow,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                title,
+                style: GoogleFonts.outfit(
+                  fontSize: 16, // Slightly smaller for section sub-headers
+                  fontWeight: FontWeight.w900,
+                  color: YensTheme.navy,
                 ),
-            ],
+              ),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 260,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: items.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 14),
+            itemBuilder: (context, i) => SizedBox(
+              width: 170,
+              child: ProductMenuCard(
+                product: items[i],
+                badgeLabel: badge != null ? (badge == 'BESTSELLER' ? '#${i + 1} Popular' : badge) : null,
+                badgeColor: badgeColor,
+                onAdd: () => _addCart(cart, items[i]),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _homeFooter() {
+    return Column(
+      children: [
+        Image.asset('assets/logo.jpg', height: 40, opacity: const AlwaysStoppedAnimation(0.2)),
+        const SizedBox(height: 16),
+        Text(
+          'Yens Boutique • Quality First',
+          style: GoogleFonts.outfit(color: Colors.grey.shade400, fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 1.5),
+        ),
+      ],
+    );
+  }
+
+  double _price(Map<String, dynamic> p) => double.tryParse('${p['price']}') ?? 0;
+
+  void _addCart(CartProvider cart, Map<String, dynamic> p) {
+    final price = _price(p);
+    cart.addItem(
+      productId: '${p['id']}',
+      name: '${p['name']}',
+      imageUrl: p['imageUrl']?.toString() ?? '',
+      price: price,
+      rewardPoints: (p['rewardPoints'] as num?)?.toInt() ?? price.round(),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${p['name']} added'),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: YensTheme.navy,
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> get _bestsellers {
+    var list = List<Map<String, dynamic>>.from(_products);
+    list.sort((a, b) {
+      final isBestsellerA = (a['badge']?.toString().toUpperCase() == 'BESTSELLER' ||
+          a['isBestseller'] == true ||
+          a['featured'] == true) ? 1 : 0;
+      final isBestsellerB = (b['badge']?.toString().toUpperCase() == 'BESTSELLER' ||
+          b['isBestseller'] == true ||
+          b['featured'] == true) ? 1 : 0;
+      if (isBestsellerA != isBestsellerB) {
+        return isBestsellerB.compareTo(isBestsellerA);
+      }
+      final pa = a['popularity'] ?? a['sales'] ?? a['salesCount'] ?? 0;
+      final pb = b['popularity'] ?? b['sales'] ?? b['salesCount'] ?? 0;
+      return (pb as num).compareTo(pa as num);
+    });
+    return list.take(10).toList();
+  }
+}
+
+class _HomeScreenCartButton extends StatelessWidget {
+  const _HomeScreenCartButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<CartProvider>(
+      builder: (context, cart, _) {
+        final count = cart.itemCount;
+        return Material(
+          color: Colors.white.withOpacity(0.92),
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const CartPage()),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Badge(
+                isLabelVisible: count > 0,
+                label: Text(
+                  '$count',
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                backgroundColor: Colors.red.shade600,
+                child: const Icon(Icons.shopping_cart_outlined, size: 22, color: YensTheme.navy),
+              ),
+            ),
           ),
         );
       },
     );
   }
-
-  void _add(CartProvider cart, Map<String, dynamic> product) {
-    final price = double.tryParse('${product['price']}') ?? 0;
-    cart.addItem(
-      productId: '${product['id']}',
-      name: '${product['name']}',
-      imageUrl: product['imageUrl']?.toString() ?? '',
-      price: price,
-      rewardPoints: (product['rewardPoints'] as num?)?.toInt() ?? price.round(),
-    );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${product['name']} added to cart'),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xffF5C021),
-      ),
-    );
-  }
-
-  Widget _roundIcon(IconData icon, VoidCallback onTap, Color bg, Color fg) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 30,
-        height: 30,
-        decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
-        child: Icon(icon, size: 16, color: fg),
-      ),
-    );
-  }
 }
 
-extension on Color {
-  Color darken([double amount = .1]) {
-    final hsl = HSLColor.fromColor(this);
-    final l = (hsl.lightness - amount).clamp(0.0, 1.0);
-    return hsl.withLightness(l).toColor();
+class _MockQrPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = YensTheme.navy
+      ..style = PaintingStyle.fill;
+
+    final w = size.width;
+    final h = size.height;
+    final cellSize = w / 9;
+
+    void drawBlock(int x, int y, int sizeInCells) {
+      canvas.drawRect(
+        Rect.fromLTWH(x * cellSize, y * cellSize, sizeInCells * cellSize, sizeInCells * cellSize),
+        paint,
+      );
+    }
+
+    void drawFinder(int x, int y) {
+      drawBlock(x, y, 3);
+      final whitePaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(
+        Rect.fromLTWH((x + 0.5) * cellSize, (y + 0.5) * cellSize, 2 * cellSize, 2 * cellSize),
+        whitePaint,
+      );
+      drawBlock(x + 1, y + 1, 1);
+    }
+
+    drawFinder(0, 0);
+    drawFinder(6, 0);
+    drawFinder(0, 6);
+
+    drawBlock(4, 1, 1);
+    drawBlock(5, 2, 1);
+    drawBlock(3, 4, 1);
+    drawBlock(4, 5, 2);
+    drawBlock(5, 7, 1);
+    drawBlock(7, 4, 1);
+    drawBlock(8, 5, 1);
+    drawBlock(2, 4, 1);
+    drawBlock(1, 5, 1);
+    drawBlock(5, 0, 1);
+    drawBlock(8, 8, 1);
+    drawBlock(6, 5, 1);
+    drawBlock(7, 7, 1);
   }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

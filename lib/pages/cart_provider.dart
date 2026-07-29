@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../controllers/notifications_controller.dart';
 
 class CartItem {
   final String productId;
@@ -21,26 +23,34 @@ class CartItem {
   int get totalPoints => rewardPoints * quantity;
 
   Map<String, dynamic> toJson() => {
-    'productId': productId,
-    'name': name,
-    'price': price,
-    'quantity': quantity,
-    'rewardPoints': rewardPoints,
-  };
+        'productId': productId,
+        'name': name,
+        'price': price,
+        'quantity': quantity,
+        'rewardPoints': rewardPoints,
+      };
 }
 
 class CartProvider extends ChangeNotifier {
   final List<CartItem> _items = [];
+  
+  // --- NEW LANGUAGE STATE ---
+  bool _isEnglish = false;
+  bool get isEnglish => _isEnglish;
+
+  void toggleLanguage() {
+    _isEnglish = !_isEnglish;
+    notifyListeners(); // Ye line poore app ko refresh karegi translation ke liye
+  }
+  // ---------------------------
 
   List<CartItem> get items => List.unmodifiable(_items);
 
   int get itemCount => _items.fold(0, (sum, item) => sum + item.quantity);
 
-  double get totalPrice =>
-      _items.fold(0, (sum, item) => sum + item.totalPrice);
+  double get totalPrice => _items.fold(0, (sum, item) => sum + item.totalPrice);
 
-  int get totalPoints =>
-      _items.fold(0, (sum, item) => sum + item.totalPoints);
+  int get totalPoints => _items.fold(0, (sum, item) => sum + item.totalPoints);
 
   bool isInCart(String productId) =>
       _items.any((item) => item.productId == productId);
@@ -51,6 +61,27 @@ class CartProvider extends ChangeNotifier {
     } catch (_) {
       return 0;
     }
+  }
+
+  NotificationsController? _notificationsCtrl;
+  Timer? _abandonedCartTimer;
+
+  void setNotificationsController(NotificationsController ctrl) {
+    _notificationsCtrl = ctrl;
+  }
+
+  void _scheduleAbandonedCartAlert() {
+    _abandonedCartTimer?.cancel();
+    if (_items.isEmpty) return;
+
+    _abandonedCartTimer = Timer(const Duration(seconds: 45), () {
+      if (_items.isNotEmpty && _notificationsCtrl != null) {
+        _notificationsCtrl!.addOffer(
+          title: "Our Cart is Waiting! 🍦",
+          body: "You have ${_items.length} delicious item(s) waiting in your cart. Checkout now to claim your loyalty points!",
+        );
+      }
+    });
   }
 
   void addItem({
@@ -72,6 +103,7 @@ class CartProvider extends ChangeNotifier {
         rewardPoints: rewardPoints,
       ));
     }
+    _scheduleAbandonedCartAlert();
     notifyListeners();
   }
 
@@ -83,17 +115,20 @@ class CartProvider extends ChangeNotifier {
       } else {
         _items.removeAt(index);
       }
+      _scheduleAbandonedCartAlert();
       notifyListeners();
     }
   }
 
   void deleteItem(String productId) {
     _items.removeWhere((item) => item.productId == productId);
+    _scheduleAbandonedCartAlert();
     notifyListeners();
   }
 
   void clearCart() {
     _items.clear();
+    _abandonedCartTimer?.cancel();
     notifyListeners();
   }
 }

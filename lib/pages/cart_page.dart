@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:yensss/core/app_config.dart';
+import 'package:yensss/core/yens_theme.dart';
 
 import 'cart_provider.dart';
 import 'checkout_page.dart';
@@ -12,16 +15,16 @@ class CartPage extends StatelessWidget {
     return Consumer<CartProvider>(
       builder: (context, cart, child) {
         return Scaffold(
-          backgroundColor: const Color(0xffF5F1EA),
+          backgroundColor: YensTheme.cream,
           appBar: AppBar(
-            backgroundColor: const Color(0xffF6C744),
+            backgroundColor: YensTheme.yellow,
             elevation: 0,
-            title: const Text(
+            title: Text(
               'My Cart',
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+              style: GoogleFonts.outfit(fontWeight: FontWeight.w900, color: YensTheme.navy, fontSize: 24),
             ),
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black),
+              icon: const Icon(Icons.arrow_back_ios_new, color: YensTheme.navy),
               onPressed: () => Navigator.pop(context),
             ),
             actions: [
@@ -31,23 +34,27 @@ class CartPage extends StatelessWidget {
                     showDialog<void>(
                       context: context,
                       builder: (ctx) => AlertDialog(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                        title: const Text('Clear cart'),
-                        content: const Text('Remove all items from your cart?'),
+                        backgroundColor: YensTheme.cream,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        title: Text('Clear cart', style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w900)),
+                        content: Text('Remove all items from your cart?', style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.8))),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx), 
+                            child: Text('Cancel', style: GoogleFonts.outfit(color: Colors.grey, fontWeight: FontWeight.bold))
+                          ),
                           TextButton(
                             onPressed: () {
                               cart.clearCart();
                               Navigator.pop(ctx);
                             },
-                            child: const Text('Clear', style: TextStyle(color: Colors.red)),
+                            child: Text('Clear', style: GoogleFonts.outfit(color: Colors.red, fontWeight: FontWeight.w900)),
                           ),
                         ],
                       ),
                     );
                   },
-                  child: const Text('Clear', style: TextStyle(color: Colors.black87)),
+                  child: Text('Clear', style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w800)),
                 ),
             ],
           ),
@@ -63,15 +70,21 @@ class CartPage extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(color: Colors.grey.shade100, shape: BoxShape.circle),
-            child: const Icon(Icons.shopping_cart_outlined, size: 50, color: Colors.grey),
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(color: YensTheme.yellow.withOpacity(0.2), shape: BoxShape.circle),
+            child: const Icon(Icons.shopping_cart_outlined, size: 60, color: YensTheme.navy),
           ),
-          const SizedBox(height: 20),
-          const Text('Your cart is empty', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 24),
+          Text(
+            'Your cart is empty', 
+            style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.w900, color: YensTheme.navy)
+          ),
           const SizedBox(height: 8),
-          const Text('Add something delicious from the menu.', style: TextStyle(color: Colors.grey)),
+          Text(
+            'Add something delicious from the menu.', 
+            style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.5), fontWeight: FontWeight.w600)
+          ),
         ],
       ),
     );
@@ -82,7 +95,7 @@ class CartPage extends StatelessWidget {
       children: [
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             itemCount: cart.items.length,
             itemBuilder: (context, index) {
               final item = cart.items[index];
@@ -113,74 +126,122 @@ class _CartLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: YensTheme.navy.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
       ),
       child: Row(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Image.network(
-              'https://app.yensthai.com${item.imageUrl}',
-              width: 65,
-              height: 65,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                width: 65,
-                height: 65,
-                color: Colors.grey.shade200,
-                child: const Icon(Icons.image_not_supported, color: Colors.grey),
+          Hero(
+            tag: 'cart_${item.productId}',
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.network(
+                AppConfig.mediaUrl(item.imageUrl),
+                width: 80,
+                height: 80,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 80,
+                  height: 80,
+                  color: YensTheme.cream,
+                  child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                const SizedBox(height: 4),
-                Text('฿${item.price.toStringAsFixed(0)}', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
-                Text('+${item.rewardPoints} pts each', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                Text(
+                  item.name, 
+                  style: GoogleFonts.outfit(fontWeight: FontWeight.w900, fontSize: 16, color: YensTheme.navy)
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '฿${item.price.toStringAsFixed(0)}', 
+                  style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w800, fontSize: 15)
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '+${item.rewardPoints} pts each', 
+                  style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.4), fontSize: 12, fontWeight: FontWeight.w600)
+                ),
               ],
             ),
           ),
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               GestureDetector(
-                onTap: () => cart.removeItem(item.productId),
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(color: Colors.grey.shade200, shape: BoxShape.circle),
-                  child: const Icon(Icons.remove, size: 16),
+                onTap: () => cart.deleteItem(item.productId),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: Colors.red.shade600,
+                  ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-              GestureDetector(
-                onTap: () => cart.addItem(
-                  productId: item.productId,
-                  name: item.name,
-                  imageUrl: item.imageUrl,
-                  price: item.price,
-                  rewardPoints: item.rewardPoints,
-                ),
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: const BoxDecoration(color: Color(0xffF5C021), shape: BoxShape.circle),
-                  child: const Icon(Icons.add, size: 16, color: Colors.white),
-                ),
+              Row(
+                children: [
+                  _qtyBtn(
+                    item.quantity == 1 ? Icons.delete_outline_rounded : Icons.remove,
+                    () => cart.removeItem(item.productId),
+                    isDelete: item.quantity == 1,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      '${item.quantity}',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.w900, fontSize: 18, color: YensTheme.navy),
+                    ),
+                  ),
+                  _qtyBtn(
+                    Icons.add,
+                    () => cart.addItem(
+                      productId: item.productId,
+                      name: item.name,
+                      imageUrl: item.imageUrl,
+                      price: item.price,
+                      rewardPoints: item.rewardPoints,
+                    ),
+                    isAdd: true,
+                  ),
+                ],
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _qtyBtn(IconData icon, VoidCallback onTap, {bool isAdd = false, bool isDelete = false}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: isDelete
+              ? Colors.red.shade50
+              : (isAdd ? YensTheme.yellow : YensTheme.cream),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          icon,
+          size: 18,
+          color: isDelete ? Colors.red.shade700 : YensTheme.navy,
+        ),
       ),
     );
   }
@@ -195,59 +256,68 @@ class _BottomSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
+          topLeft: Radius.circular(32),
+          topRight: Radius.circular(32),
         ),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [BoxShadow(color: YensTheme.navy.withOpacity(0.1), blurRadius: 20)],
       ),
       child: Column(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Items', style: TextStyle(color: Colors.grey)),
-              Text('${cart.itemCount}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text('Items', style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.5), fontWeight: FontWeight.w600)),
+              Text('${cart.itemCount}', style: GoogleFonts.outfit(fontWeight: FontWeight.w900, color: YensTheme.navy)),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('You will earn', style: TextStyle(color: Colors.grey)),
-              Text('+${cart.totalPoints} pts', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600)),
+              Text('You will earn', style: GoogleFonts.outfit(color: YensTheme.navy.withOpacity(0.5), fontWeight: FontWeight.w600)),
+              Text('+${cart.totalPoints} pts', style: GoogleFonts.outfit(color: YensTheme.navy, fontWeight: FontWeight.w900)),
             ],
           ),
-          const Divider(height: 20),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Divider(height: 1),
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Total', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Total', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.w900, color: YensTheme.navy)),
               Text(
                 '฿${cart.totalPrice.toStringAsFixed(0)}',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xffF5C021)),
+                style: GoogleFonts.outfit(fontSize: 26, fontWeight: FontWeight.w900, color: YensTheme.navy),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
-            height: 55,
+            height: 60,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xffF5C021),
+                backgroundColor: YensTheme.yellow,
+                foregroundColor: YensTheme.navy,
+                elevation: 4,
+                shadowColor: YensTheme.yellow.withOpacity(0.5),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
               ),
               onPressed: onCheckout,
-              child: const Row(
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.lock_outline, color: Colors.white),
-                  SizedBox(width: 8),
-                  Text('Proceed to checkout', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Icon(Icons.arrow_forward_ios_rounded, size: 18),
+                  const SizedBox(width: 12),
+                  Text(
+                    'PROCEED TO CHECKOUT', 
+                    style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 1.2)
+                  ),
                 ],
               ),
             ),

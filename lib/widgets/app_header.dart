@@ -3,12 +3,10 @@ import 'package:provider/provider.dart';
 import '../controllers/language_controller.dart';
 
 class AppHeader extends StatelessWidget {
-
   const AppHeader({super.key});
 
   @override
   Widget build(BuildContext context) {
-
     final language = Provider.of<LanguageController>(context);
 
     return Container(
@@ -17,17 +15,13 @@ class AppHeader extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-
           Row(
             children: [
-
               Image.asset(
                 "assets/logo.jpg",
-                height: 28,
+                height: 30,
               ),
-
               const SizedBox(width: 8),
-
               const Text(
                 "Yen's Thai",
                 style: TextStyle(
@@ -35,22 +29,17 @@ class AppHeader extends StatelessWidget {
                   fontSize: 16,
                 ),
               )
-
             ],
           ),
-
           Row(
             children: [
-
               GestureDetector(
-
                 onTap: () {
                   language.toggleLanguage();
                 },
-
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
@@ -63,18 +52,12 @@ class AppHeader extends StatelessWidget {
                   ),
                 ),
               ),
-
               const SizedBox(width: 10),
-
               const Icon(Icons.refresh)
-
             ],
           )
-
         ],
       ),
     );
-
   }
-
 }

@@ -1,20 +1,25 @@
 import 'dart:async';
-
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-
+import '../core/app_config.dart';
+import '../core/yens_theme.dart';
 import '../core/session_service.dart';
 import 'home_page.dart';
+
+import 'signup_page.dart';
 
 class OtpVerifyPage extends StatefulWidget {
   const OtpVerifyPage({
     super.key,
     required this.phone,
-    required this.customerData,
+    required this.exists,
+    this.customerData,
   });
 
   final String phone;
-  final Map<String, dynamic> customerData;
+  final bool exists;
+  final Map<String, dynamic>? customerData;
 
   @override
   State<OtpVerifyPage> createState() => _OtpVerifyPageState();
@@ -35,7 +40,11 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
   @override
   void initState() {
     super.initState();
-    sendOtp();
+    if (widget.exists) {
+      sendOtp();
+    } else {
+      simulateSendOtp();
+    }
   }
 
   @override
@@ -49,38 +58,60 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
     super.dispose();
   }
 
+  void simulateSendOtp() {
+    setState(() {
+      verificationId = "mock_verify";
+      isSending = false;
+      resendCooldown = true;
+      cooldownSeconds = 30;
+    });
+    startCooldown();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Sandbox Mode: Enter 123456 to verify phone number ownership"),
+            backgroundColor: YensTheme.navy,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    });
+  }
+
   Future<void> sendOtp() async {
     setState(() { isSending = true; errorMessage = null; });
 
-    await FirebaseAuth.instance.verifyPhoneNumber(
-      phoneNumber: widget.phone,
-      timeout: const Duration(seconds: 60),
+    try {
+      final url = Uri.parse("${AppConfig.apiBase}/api/customers/auth/request");
+      final res = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"phone": widget.phone}),
+      ).timeout(const Duration(seconds: 15));
 
-      verificationCompleted: (PhoneAuthCredential credential) async {
-        await _signInAndNavigate(credential);
-      },
-
-      verificationFailed: (FirebaseAuthException e) {
+      if (res.statusCode == 200) {
         setState(() {
-          isSending = false;
-          errorMessage = "Failed to send OTP: ${e.message}";
-        });
-      },
-
-      codeSent: (String verId, int? resendToken) {
-        setState(() {
-          verificationId = verId;
+          verificationId = "local_twilio";
           isSending = false;
           resendCooldown = true;
           cooldownSeconds = 30;
         });
         startCooldown();
-      },
-
-      codeAutoRetrievalTimeout: (String verId) {
-        verificationId = verId;
-      },
-    );
+      } else {
+        final data = jsonDecode(res.body);
+        setState(() {
+          isSending = false;
+          errorMessage = data['message'] ?? "Failed to send OTP. Please try again.";
+        });
+      }
+    } catch (e) {
+      setState(() {
+        isSending = false;
+        errorMessage = "Error sending OTP: ${e.toString()}";
+      });
+    }
   }
 
   void startCooldown() async {
@@ -104,45 +135,69 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
     }
     setState(() { isLoading = true; errorMessage = null; });
 
-    try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: verificationId!,
-        smsCode: otp,
-      );
-      await _signInAndNavigate(credential);
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        isLoading = false;
-        errorMessage = e.code == 'invalid-verification-code'
-            ? "Wrong OTP. Please try again."
-            : "Verification failed. Please try again.";
-        for (var c in otpControllers) {
-          c.clear();
-        }
-        focusNodes[0].requestFocus();
-      });
+    if (!widget.exists) {
+      // New user registration flow verification (Sandbox Mode)
+      if (otp == "123456") {
+        setState(() => isLoading = false);
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SignupPage(phone: widget.phone),
+          ),
+        );
+      } else {
+        setState(() {
+          isLoading = false;
+          errorMessage = "Wrong OTP. Use 123456 to verify number.";
+          for (var c in otpControllers) {
+            c.clear();
+          }
+          focusNodes[0].requestFocus();
+        });
+      }
+      return;
     }
-  }
 
-  Future<void> _signInAndNavigate(PhoneAuthCredential credential) async {
     try {
-      await FirebaseAuth.instance.signInWithCredential(credential);
+      final url = Uri.parse("${AppConfig.apiBase}/api/customers/auth/verify");
+      final res = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "phone": widget.phone,
+          "code": otp,
+        }),
+      ).timeout(const Duration(seconds: 15));
 
-      await SessionService.instance.persistCustomerSession(
-        customerData: widget.customerData,
-        firebaseUser: FirebaseAuth.instance.currentUser,
-      );
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        
+        await SessionService.instance.persistCustomerSession(
+          customerData: data,
+        );
 
-      if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const HomePage()),
-            (route) => false,
-      );
-    } on FirebaseAuthException catch (e) {
+        if (!mounted) return;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomePage()),
+          (route) => false,
+        );
+      } else {
+        final data = jsonDecode(res.body);
+        setState(() {
+          isLoading = false;
+          errorMessage = data['message'] ?? "Wrong OTP. Please try again.";
+          for (var c in otpControllers) {
+            c.clear();
+          }
+          focusNodes[0].requestFocus();
+        });
+      }
+    } catch (e) {
       setState(() {
         isLoading = false;
-        errorMessage = "Sign in failed: ${e.message}";
+        errorMessage = "Verification failed: ${e.toString()}";
       });
     }
   }
@@ -181,7 +236,7 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
               if (isSending)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 20),
-                  child: CircularProgressIndicator(color: Color(0xffF5C021), strokeWidth: 3),
+                  child: CircularProgressIndicator(color: YensTheme.navy, strokeWidth: 3),
                 )
               else
                 Row(
@@ -207,7 +262,7 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(color: Color(0xffF5C021), width: 2),
+                            borderSide: const BorderSide(color: YensTheme.accent, width: 2),
                           ),
                         ),
                         onChanged: (value) {
@@ -249,13 +304,13 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
                 height: 55,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xffF5C021),
+                    backgroundColor: YensTheme.accent,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                   ),
                   onPressed: (isLoading || isSending) ? null : handleVerify,
                   child: isLoading
-                      ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
-                      : const Text("Verify OTP", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(color: YensTheme.navy, strokeWidth: 2.5))
+                      : const Text("Verify OTP", style: TextStyle(color: YensTheme.navy, fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
               ),
 
